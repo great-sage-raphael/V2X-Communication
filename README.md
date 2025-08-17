@@ -1,50 +1,51 @@
 # V2X-Communication
 
 
-1 # Architecture
-   ┌──────────────────┐
-   │  Sensors (Camera,│
-   │  LiDAR, Radar)   │
-   └─────────┬────────┘
-             │
-             ▼
-   ┌──────────────────┐
-   │ Perception Layer │
-   │ (YOLO + ByteTrack│
-   │  + Semantic Enc.)│
-   └─────────┬────────┘
-             │
-             ▼
-   ┌──────────────────────────┐
-   │ Semantic Features Vector │
-   └─────────┬────────────────┘
-             │
-             ▼
-   ┌───────────────────┐
-   │ Channel Selection │◄───┐
-   │  (DQN + GNN)      │    │
-   └─────────┬─────────┘    │
-             │               │
-             ▼               │
-   ┌───────────────────┐     │
-   │ Communication     │     │
-   │ (DDS Publisher /  │─────┘
-   │  Subscriber + QoS)│
-   └─────────┬─────────┘
-             │
-             ▼
-   ┌──────────────────┐
-   │ Network / RSUs   │
-   │ (V2V + V2I links)│
-   └─────────┬────────┘
-             │
-             ▼
-   ┌───────────────────┐
-   │ Simulation &      │
-   │ Visualization     │
-   │ (Mobility, Delay, │
-   │ Plots, Animations)│
-   └───────────────────┘
+1 ### Architecture
+
+            ┌──────────────────┐
+            │  Sensors (Camera,│
+            │  LiDAR, Radar)   │
+            └─────────┬────────┘
+                      │
+                      ▼
+            ┌──────────────────┐
+            │ Perception Layer │
+            │ (YOLO + ByteTrack│
+            │  + Semantic Enc.)│
+            └─────────┬────────┘
+                      │
+                      ▼
+            ┌──────────────────────────┐
+            │ Semantic Features Vector │
+            └─────────┬────────────────┘
+                      │
+                      ▼
+            ┌───────────────────┐
+            │ Channel Selection │◄───┐
+            │  (DQN + GNN)      │    │
+            └─────────┬─────────┘    │
+                      │               │
+                      ▼               │
+            ┌───────────────────┐     │
+            │ Communication     │     │
+            │ (DDS Publisher /  │─────┘
+            │  Subscriber + QoS)│
+            └─────────┬─────────┘
+                      │
+                      ▼
+            ┌──────────────────┐
+            │ Network / RSUs   │
+            │ (V2V + V2I links)│
+            └─────────┬────────┘
+                      │
+                      ▼
+            ┌───────────────────┐
+            │ Simulation &      │
+            │ Visualization     │
+            │ (Mobility, Delay, │
+          │ Plots, Animations)│
+            └───────────────────┘
 
 
 2 # Working 
