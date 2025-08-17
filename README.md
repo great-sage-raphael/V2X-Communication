@@ -2,38 +2,50 @@
 
 
 1 # Architecture
-  +----------------+
-|  Perception    | 
-| (YOLO → ByteT) | 
-+-------+--------+
-        |
-        v
-+-------------------+
-| Semantic Encoder  |
-+-------------------+
-        |
-        v
-+----------------------+
-| Semantic Communication|
-| (DDS + QoS)          |
-+-----------+----------+
-            |
-            v
-     +---------------+
-     | Channel Select| <---- Topology + Channel State
-     | (DQN + GNN)   |
-     +-------+-------+
-             |
-             v
-+-------------------------+
-|  Simulation Engine      |
-| (Mobility + V2V/V2I)    |
-+-------------------------+
-             |
-             v
-   +---------------------+
-   | Visualization Plots |
-   +---------------------+
+   ┌──────────────────┐
+   │  Sensors (Camera,│
+   │  LiDAR, Radar)   │
+   └─────────┬────────┘
+             │
+             ▼
+   ┌──────────────────┐
+   │ Perception Layer │
+   │ (YOLO + ByteTrack│
+   │  + Semantic Enc.)│
+   └─────────┬────────┘
+             │
+             ▼
+   ┌──────────────────────────┐
+   │ Semantic Features Vector │
+   └─────────┬────────────────┘
+             │
+             ▼
+   ┌───────────────────┐
+   │ Channel Selection │◄───┐
+   │  (DQN + GNN)      │    │
+   └─────────┬─────────┘    │
+             │               │
+             ▼               │
+   ┌───────────────────┐     │
+   │ Communication     │     │
+   │ (DDS Publisher /  │─────┘
+   │  Subscriber + QoS)│
+   └─────────┬─────────┘
+             │
+             ▼
+   ┌──────────────────┐
+   │ Network / RSUs   │
+   │ (V2V + V2I links)│
+   └─────────┬────────┘
+             │
+             ▼
+   ┌───────────────────┐
+   │ Simulation &      │
+   │ Visualization     │
+   │ (Mobility, Delay, │
+   │ Plots, Animations)│
+   └───────────────────┘
+
 
 2 # Working 
     ### Perception Layer (Environment)
