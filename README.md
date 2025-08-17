@@ -1,6 +1,6 @@
 # V2X-Communication
 
-```mermaid
+
 1 # Architecture
    ┌──────────────────┐
    │  Sensors (Camera,│
