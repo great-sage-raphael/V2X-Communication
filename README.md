@@ -2,26 +2,39 @@
 
 
 1 # Architecture
-   ┌─────────────────────────────────────────┐
-   │          Perception Layer               │
-   │  Vehicles, RSUs, Mobility Model         │
-   └───────────────┬─────────────────────────┘
-                   │
-   ┌───────────────▼─────────────────────────┐
-   │        Communication Layer              │
-   │  V2V & V2I Data Exchange + Channel Mgmt │
-   └───────────────┬─────────────────────────┘
-                   │
-   ┌───────────────▼─────────────────────────┐
-   │         Decision Layer (RL Agent)       │
-   │  Input: Channel states, traffic load    │
-   │  Output: Channel selection + scheduling │
-   └───────────────┬─────────────────────────┘
-                   │
-   ┌───────────────▼─────────────────────────┐
-   │    Analysis & Visualization Layer       │
-   │  Latency, PDR, Utilization, Graphs      │
-   └─────────────────────────────────────────┘
+  +----------------+
+|  Perception    | 
+| (YOLO → ByteT) | 
++-------+--------+
+        |
+        v
++-------------------+
+| Semantic Encoder  |
++-------------------+
+        |
+        v
++----------------------+
+| Semantic Communication|
+| (DDS + QoS)          |
++-----------+----------+
+            |
+            v
+     +---------------+
+     | Channel Select| <---- Topology + Channel State
+     | (DQN + GNN)   |
+     +-------+-------+
+             |
+             v
++-------------------------+
+|  Simulation Engine      |
+| (Mobility + V2V/V2I)    |
++-------------------------+
+             |
+             v
+   +---------------------+
+   | Visualization Plots |
+   +---------------------+
+
 2 # Working 
     ### Perception Layer (Environment)
     
