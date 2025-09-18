@@ -1,4 +1,4 @@
-# src/perception/sumo_detection_module.py
+# src/perception/detection_module.py
 """
 SUMO-based detection module that works directly with SUMO vehicle data
 instead of running YOLO on video frames.

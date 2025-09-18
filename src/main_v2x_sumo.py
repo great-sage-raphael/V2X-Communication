@@ -10,11 +10,11 @@ import argparse
 from pathlib import Path
 
 # Import your fixed modules
-from sumo_input_module import SumoInputModule
-from sumo_detection_module import SumoDetectionModule
-from enhanced_tracking_module import EnhancedTracker
-from sumo_output_module import SumoOutputModule
-from sumo_to_detection import SumoToDetections
+from perception.input_module import SumoInputModule
+from perception.detection_module import SumoDetectionModule
+from perception.tracking_module import EnhancedTracker
+from perception.output_module import SumoOutputModule
+from simulation.sumo_interface import SumoRunner
 
 def create_v2x_config():
     """Create default V2X configuration."""

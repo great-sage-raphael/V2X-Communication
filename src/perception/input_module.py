@@ -1,12 +1,12 @@
-# src/perception/sumo_input_module.py
+# src/perception/input_module.py
 """
 SUMO-based input module to replace video capture.
 Provides vehicle data from SUMO simulation instead of video frames.
 """
 
 import numpy as np
-from sumo_interface import SumoRunner
-from sumo_to_detection import SumoToDetections
+from simulation.sumo_interface import SumoRunner
+from simulation.sumo_to_detection import SumoToDetections
 
 class SumoInputModule:
     def __init__(self, sumocfg=None, sumo_binary="sumo", step_length=0.1, 
