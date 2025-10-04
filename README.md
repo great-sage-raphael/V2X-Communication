@@ -1,50 +1,46 @@
-# V2X-Communication
+# V2X Communication System Architecture (Digital Twin + RL-based Connection Management)
 
 
 1 # Architecture
 
-            ┌──────────────────┐
-            │  Sensors (Camera,│
-            │  LiDAR, Radar)   │
-            └─────────┬────────┘
-                      │
-                      ▼
-            ┌──────────────────┐
-            │ Perception Laye  │
-            │ (YOLO + ByteTrack│
-            │  + Semantic Enc.)│
-            └─────────┬────────┘
-                      │
-                      ▼
-            ┌──────────────────────────┐
-            │ Semantic Features Vector │
-            └─────────┬────────────────┘
-                      │
-                      ▼
-            ┌───────────────────┐
-            │ Channel Selection │◄───┐
-            │  (DQN + GNN)      │    │
-            └─────────┬─────────┘    │
-                      │              │
-                      ▼              │
-            ┌───────────────────┐    │
-            │ Communication     │    │
-            │ (DDS Publisher /  │────┘
-            │  Subscriber + QoS)│
-            └─────────┬─────────┘
-                      │
-                      ▼
-            ┌──────────────────┐
-            │ Network / RSUs   │
-            │ (V2V + V2I links)│
-            └─────────┬────────┘
-                      │
-                      ▼
-            ┌───────────────────┐
-            │ Simulation &      │
-            │ Visualization     │
-            │ (Mobility, Delay, │
-            │ Plots, Animations)│
-            └───────────────────┘
+            
+  ┌───────────────┐
+  │   Vehicles    │
+  │───────────────│
+  │ Sensors / GPS │
+  │ Speed / Lane  │
+  │ Acceleration  │
+  └───────┬───────┘
+          │  Vehicle State (Position, Speed, Accel, Lane, etc.)
+          ▼
+  ┌───────────────┐
+  │ Base Station  │
+  │ / RSU / Edge  │
+  │───────────────│
+  │  Digital Twin │ <───────────── Real-Time Feed of All Vehicles
+  │ (Bird’s Eye   │
+  │    View)      │
+  └───────┬───────┘
+          │
+          ▼
+  ┌───────────────┐
+  │ RL / DL Model │
+  │───────────────│
+  │ Connection    │
+  │ Optimization  │
+  │ (V2V / V2I)   │
+  │ Uncertainty   │
+  │ Prediction    │
+  └───────┬───────┘
+          │
+          ▼
+  ┌───────────────┐
+  │   Vehicles    │
+  │───────────────│
+  │ Connection    │
+  │ Instructions  │
+  │ (V2V / V2I)   │
+  └───────────────┘
+
 
 
