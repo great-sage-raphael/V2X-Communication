@@ -8,7 +8,6 @@
     <period value="2.0"/>
 </configuration>
 -->
-
 <routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
     <trip id="0" depart="0.00" from="680782188#7" to="-178899417#7"/>
     <trip id="1" depart="2.00" from="157292833#13" to="1245764631#1"/>
