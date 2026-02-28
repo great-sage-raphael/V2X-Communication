@@ -1,1 +1,29 @@
+# Python virtual environments
 venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Model checkpoints & training logs
+agent/models/
+agent/logs/
+
+# Generated figures
+v2x_results/figures/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Distribution
+dist/
+build/
+*.egg-info/

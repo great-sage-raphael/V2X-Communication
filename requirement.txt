@@ -1,0 +1,19 @@
+# V2X Communication System — Dependencies
+# Install with: pip install -r requirement.txt
+
+# RL Framework
+stable-baselines3>=2.3.0
+gymnasium>=0.29.1
+
+# Data & Visualization
+matplotlib>=3.8.0
+seaborn>=0.13.0
+pandas>=2.1.0
+numpy>=1.26.0
+
+# Training monitoring
+tensorboard>=2.16.0
+
+# SUMO TraCI (install separately via SUMO package)
+# traci is bundled with SUMO — ensure SUMO_HOME is set
+# and SUMO /tools folder is on PYTHONPATH
