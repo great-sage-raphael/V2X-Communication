@@ -11,19 +11,24 @@ WHY PPO (not DQN or SAC)?
 Directory layout created by this script:
     agent/
       models/
-        best_model.zip          ← Best checkpoint (saved by EvalCallback)
+        best_model.zip          ← Best checkpoint (saved by CheckpointCallback)
         final_model.zip         ← Model after full training run
       logs/
         training_monitor/       ← SB3 Monitor CSV (per-episode reward + length)
-        eval_monitor/           ← Evaluation env Monitor CSV
         tb_logs/v2x_ppo_1/      ← TensorBoard event files
         eval_summary.csv        ← Post-training: 50-ep RL policy evaluation
         baseline_summary.csv    ← 50-ep V2I-only rule-based baseline
 
+IMPORTANT — Single TraCI Connection:
+    SUMO only allows ONE active TraCI connection per process. This script uses
+    a single V2XEnv for training, closes it, then creates fresh envs for
+    evaluation and baseline. DO NOT use EvalCallback with a separate eval_env
+    — it will crash with "Connection refused" when it tries to reset mid-rollout.
+
 Usage:
     python agent/train.py                        # full 500k-step run
     python agent/train.py --timesteps 5000       # quick smoke-test
-    python agent/train.py --timesteps 500000 --eval-freq 10000
+    python agent/train.py --timesteps 500000 --eval-freq 50000
 """
 
 import os
@@ -33,7 +38,6 @@ import csv
 import numpy as np
 
 # ── Path setup ────────────────────────────────────────────────────────────────
-# Allow imports from the project root so `env/v2x_env.py` is discoverable.
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "env"))
 
@@ -41,163 +45,168 @@ from v2x_env import V2XEnv
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
+from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 # ── Directory constants ───────────────────────────────────────────────────────
-AGENT_DIR    = os.path.dirname(os.path.abspath(__file__))
-MODELS_DIR   = os.path.join(AGENT_DIR, "models")
-LOGS_DIR     = os.path.join(AGENT_DIR, "logs")
-TB_LOGS_DIR  = os.path.join(LOGS_DIR, "tb_logs")
+AGENT_DIR   = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR  = os.path.join(AGENT_DIR, "models")
+LOGS_DIR    = os.path.join(AGENT_DIR, "logs")
+TB_LOGS_DIR = os.path.join(LOGS_DIR, "tb_logs")
 
-TRAIN_MONITOR_DIR = os.path.join(LOGS_DIR, "training_monitor")
-EVAL_MONITOR_DIR  = os.path.join(LOGS_DIR, "eval_monitor")
-
+TRAIN_MONITOR_DIR    = os.path.join(LOGS_DIR, "training_monitor")
 EVAL_SUMMARY_CSV     = os.path.join(LOGS_DIR, "eval_summary.csv")
 BASELINE_SUMMARY_CSV = os.path.join(LOGS_DIR, "baseline_summary.csv")
-BEST_MODEL_PATH      = os.path.join(MODELS_DIR, "best_model")
 FINAL_MODEL_PATH     = os.path.join(MODELS_DIR, "final_model")
 
 
 def make_dirs():
-    """Create all required output directories."""
-    for d in [MODELS_DIR, LOGS_DIR, TB_LOGS_DIR, TRAIN_MONITOR_DIR, EVAL_MONITOR_DIR]:
+    for d in [MODELS_DIR, LOGS_DIR, TB_LOGS_DIR, TRAIN_MONITOR_DIR]:
         os.makedirs(d, exist_ok=True)
 
 
 def make_env(monitor_dir, tag="train"):
     """
-    Factory function that returns a callable creating a monitored V2XEnv.
-    Monitor wraps the env and writes per-episode reward + length to a CSV file,
-    which the plotting script later reads for the Learning Curve figure.
+    Factory returning a callable that creates a monitored V2XEnv.
+    Monitor writes per-episode reward + length to a CSV for plotting.
     """
     def _init():
         env = V2XEnv()
-        # Monitor writes: timesteps, episode reward, episode length to monitor.csv
         env = Monitor(env, filename=os.path.join(monitor_dir, tag))
         return env
     return _init
 
 
-def train_ppo(total_timesteps: int, eval_freq: int):
+# ── Custom callback: log PDR + latency to TensorBoard ────────────────────────
+class V2XMetricsCallback(BaseCallback):
     """
-    Full PPO training loop.
+    Reads the 'pdr' and 'mean_latency' keys from the info dict returned by
+    env.step() and logs them as TensorBoard scalars every step.
+    These supplement SB3's built-in reward/ep_len metrics.
+    """
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
 
-    Architecture:
-        - Policy: MlpPolicy with two hidden layers of 256 units.
-        - The (20, 4) observation is flattened to an 80-dim input automatically
-          by SB3's FlattenObservation feature.
-        - EvalCallback: evaluates periodically, saves best model weights.
-        - CheckpointCallback: saves a .zip snapshot every 50k steps.
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        for info in infos:
+            if "pdr" in info:
+                self.logger.record("v2x/pdr", info["pdr"])
+            if "mean_latency" in info:
+                self.logger.record("v2x/mean_latency_ms", info["mean_latency"])
+        return True  # returning False would stop training
+
+
+def train_ppo(total_timesteps: int, checkpoint_freq: int):
+    """
+    Full PPO training loop with a single SUMO environment.
+
+    Architecture notes:
+        - Policy: MlpPolicy — the (20, 4) observation is auto-flattened to 80-dim.
+        - No EvalCallback: SUMO only allows one TraCI connection at a time.
+          We save checkpoints via CheckpointCallback and evaluate separately
+          after training completes.
+        - V2XMetricsCallback: streams PDR + latency to TensorBoard.
     """
     print("=" * 60)
     print("  V2X Intelligent Communication — PPO Training")
-    print(f"  Total timesteps : {total_timesteps:,}")
-    print(f"  Eval frequency  : every {eval_freq:,} steps")
+    print(f"  Total timesteps    : {total_timesteps:,}")
+    print(f"  Checkpoint every   : {checkpoint_freq:,} steps")
     print("=" * 60)
 
     make_dirs()
 
-    # ── Build Training Environment ─────────────────────────────────────────
-    # DummyVecEnv wraps a single env in a vectorised interface required by SB3.
+    # ── Single training environment ────────────────────────────────────────
     train_env = DummyVecEnv([make_env(TRAIN_MONITOR_DIR, tag="train")])
 
-    # ── Build Evaluation Environment ───────────────────────────────────────
-    # Separate env instance used exclusively by EvalCallback.
-    # This ensures evaluation episodes are independent of the training rollout.
-    eval_env = DummyVecEnv([make_env(EVAL_MONITOR_DIR, tag="eval")])
-
     # ── Callbacks ─────────────────────────────────────────────────────────
-    # EvalCallback runs `n_eval_episodes` evaluation episodes every `eval_freq`
-    # training steps and saves the checkpoint whenever mean reward improves.
-    eval_callback = EvalCallback(
-        eval_env,
-        best_model_save_path = MODELS_DIR,
-        log_path             = LOGS_DIR,
-        eval_freq            = eval_freq,
-        n_eval_episodes      = 5,
-        deterministic        = True,
-        render               = False,
-        verbose              = 1,
-    )
-
-    # CheckpointCallback: saves a snapshot every 50k steps as a safety net.
     checkpoint_callback = CheckpointCallback(
-        save_freq         = max(50_000, eval_freq * 5),
-        save_path         = MODELS_DIR,
-        name_prefix       = "v2x_ppo_checkpoint",
-        save_replay_buffer= False,
-        verbose           = 1,
+        save_freq   = checkpoint_freq,
+        save_path   = MODELS_DIR,
+        name_prefix = "v2x_ppo_checkpoint",
+        verbose     = 1,
     )
+    metrics_callback = V2XMetricsCallback(verbose=0)
 
-    # ── PPO Hyperparameters ────────────────────────────────────────────────
-    # policy_kwargs: two hidden layers of 256 neurons — sufficient for an
-    # 80-dimensional input while avoiding over-parameterisation.
+    # ── PPO model ─────────────────────────────────────────────────────────
     model = PPO(
-        policy          = "MlpPolicy",
-        env             = train_env,
-        learning_rate   = 3e-4,          # Standard starting LR for PPO
-        n_steps         = 2048,          # Steps per rollout buffer
-        batch_size      = 64,            # Mini-batch size for policy update
-        n_epochs        = 10,            # Gradient update epochs per rollout
-        gamma           = 0.99,          # Discount factor
-        gae_lambda      = 0.95,          # GAE smoothing factor
-        clip_range      = 0.2,           # PPO clipping parameter
-        ent_coef        = 0.01,          # Entropy bonus (encourages exploration)
-        vf_coef         = 0.5,           # Value function loss weight
-        max_grad_norm   = 0.5,
-        policy_kwargs   = {"net_arch": [256, 256]},
+        policy        = "MlpPolicy",
+        env           = train_env,
+        learning_rate = 3e-4,
+        n_steps       = 2048,       # Steps per rollout buffer
+        batch_size    = 64,
+        n_epochs      = 10,
+        gamma         = 0.99,
+        gae_lambda    = 0.95,
+        clip_range    = 0.2,
+        ent_coef      = 0.01,       # Entropy bonus (encourages exploration)
+        vf_coef       = 0.5,
+        max_grad_norm = 0.5,
+        policy_kwargs = {"net_arch": [256, 256]},
         tensorboard_log = TB_LOGS_DIR,
-        verbose         = 1,
+        verbose       = 1,
     )
 
     # ── Train ─────────────────────────────────────────────────────────────
     model.learn(
         total_timesteps = total_timesteps,
-        callback        = [eval_callback, checkpoint_callback],
+        callback        = [checkpoint_callback, metrics_callback],
         tb_log_name     = "v2x_ppo",
-        progress_bar    = True,
+        reset_num_timesteps = True,
     )
 
-    # Save final model regardless of EvalCallback outcome
+    # Save the final weights regardless of checkpoint history
     model.save(FINAL_MODEL_PATH)
     print(f"\n[✓] Final model saved → {FINAL_MODEL_PATH}.zip")
 
-    # Close envs
+    # IMPORTANT: close training env before opening a new SUMO connection
     train_env.close()
-    eval_env.close()
+    print("[✓] Training environment closed (SUMO connection released)")
 
     return model
 
 
+def _best_model_path():
+    """
+    Find the highest-step checkpoint saved by CheckpointCallback.
+    Falls back to the final model if no checkpoints exist.
+    """
+    checkpoints = [
+        f for f in os.listdir(MODELS_DIR)
+        if f.startswith("v2x_ppo_checkpoint_") and f.endswith(".zip")
+    ]
+    if checkpoints:
+        # Filenames: v2x_ppo_checkpoint_<steps>_steps.zip
+        # Sort by the numeric steps field
+        checkpoints.sort(key=lambda f: int(f.split("_")[3]))
+        best = os.path.join(MODELS_DIR, checkpoints[-1])
+        print(f"[→] Using latest checkpoint: {checkpoints[-1]}")
+        return best
+    return FINAL_MODEL_PATH + ".zip"
+
+
 def run_evaluation(model, n_episodes=50, label="RL_PPO"):
     """
-    Evaluate a trained model for `n_episodes` episodes and write a detailed
-    CSV log. Each row captures: episode index, total reward, mean PDR, mean
-    latency, V2V ratio, and V2I ratio.
+    Evaluate a trained model for `n_episodes` episodes.
+    Opens a fresh V2XEnv (new SUMO process) — call only after train_env.close().
 
-    This CSV is the primary data source for the latency, PDR, and mode
-    distribution plots in plot_results.py.
+    Each row in the output CSV captures:
+        episode, total_reward, mean_pdr, mean_latency_ms, v2v_ratio, v2i_ratio
     """
     print(f"\n[→] Running {n_episodes}-episode evaluation: {label}")
-
     rows = []
     env  = V2XEnv()
 
     for ep in range(n_episodes):
-        obs, _      = env.reset()
-        ep_reward   = 0.0
-        terminated  = truncated = False
+        obs, _     = env.reset()
+        ep_reward  = 0.0
+        terminated = truncated = False
 
         while not (terminated or truncated):
-            # Synchronise RL decisions with SUMO's current vehicle state.
-            # The policy produces a (MAX_VEHICLES,) action array; only the
-            # first N entries (active vehicles) are used inside env.step().
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
             ep_reward += reward
 
-        # Retrieve episode-level aggregated metrics from the env
         summary = env.get_episode_summary()
         rows.append({
             "episode":         ep + 1,
@@ -209,12 +218,16 @@ def run_evaluation(model, n_episodes=50, label="RL_PPO"):
         })
 
         if (ep + 1) % 10 == 0:
-            avg_reward = np.mean([r["total_reward"] for r in rows[-10:]])
-            print(f"  Episode {ep+1:3d}/{n_episodes} | Last-10 avg reward: {avg_reward:.3f}")
+            avg_r = np.mean([r["total_reward"] for r in rows[-10:]])
+            avg_pdr = np.mean([r["mean_pdr"] for r in rows[-10:]])
+            avg_lat = np.mean([r["mean_latency_ms"] for r in rows[-10:]])
+            print(f"  Ep {ep+1:3d}/{n_episodes} | "
+                  f"avg_reward={avg_r:.3f} | "
+                  f"avg_PDR={avg_pdr:.3f} | "
+                  f"avg_latency={avg_lat:.1f}ms")
 
     env.close()
 
-    # Write CSV
     outfile = EVAL_SUMMARY_CSV if label == "RL_PPO" else BASELINE_SUMMARY_CSV
     _write_csv(rows, outfile)
     print(f"  [✓] Saved → {outfile}")
@@ -223,15 +236,14 @@ def run_evaluation(model, n_episodes=50, label="RL_PPO"):
 
 def run_baseline(n_episodes=50):
     """
-    Rule-Based Baseline: always choose V2I (mode=0) for every vehicle.
+    Rule-Based Baseline: always V2I (action=0) for every vehicle slot.
 
-    This policy represents the conventional infrastructure-centric approach
-    where vehicles always route through the base station. It provides the
-    comparison against which the RL agent's improvements are measured in
-    the Latency Comparison and PDR plots.
+    Represents the conventional infrastructure-centric approach — every
+    vehicle routes through the base station with 99% PDR but high latency.
+    This is the comparison target for the RL agent's latency improvements.
+    Opens its own fresh V2XEnv — call only after all previous envs are closed.
     """
     print(f"\n[→] Running {n_episodes}-episode V2I-only baseline")
-
     rows = []
     env  = V2XEnv()
 
@@ -241,7 +253,6 @@ def run_baseline(n_episodes=50):
         terminated = truncated = False
 
         while not (terminated or truncated):
-            # Baseline policy: always V2I (action = 0) for all vehicle slots
             action = np.zeros(20, dtype=np.int64)  # All V2I
             obs, reward, terminated, truncated, info = env.step(action)
             ep_reward += reward
@@ -257,8 +268,8 @@ def run_baseline(n_episodes=50):
         })
 
         if (ep + 1) % 10 == 0:
-            avg_reward = np.mean([r["total_reward"] for r in rows[-10:]])
-            print(f"  Episode {ep+1:3d}/{n_episodes} | Last-10 avg reward: {avg_reward:.3f}")
+            avg_r = np.mean([r["total_reward"] for r in rows[-10:]])
+            print(f"  Ep {ep+1:3d}/{n_episodes} | avg_reward={avg_r:.3f}")
 
     env.close()
     _write_csv(rows, BASELINE_SUMMARY_CSV)
@@ -267,7 +278,6 @@ def run_baseline(n_episodes=50):
 
 
 def _write_csv(rows: list, path: str):
-    """Write a list-of-dicts to a CSV file."""
     if not rows:
         return
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -284,8 +294,8 @@ def main():
         help="Total training timesteps (default: 500,000 ≈ 500 episodes)"
     )
     parser.add_argument(
-        "--eval-freq", type=int, default=10_000,
-        help="EvalCallback frequency in timesteps (default: 10,000)"
+        "--checkpoint-freq", type=int, default=50_000,
+        help="Save a model checkpoint every N steps (default: 50,000)"
     )
     parser.add_argument(
         "--eval-episodes", type=int, default=50,
@@ -293,32 +303,39 @@ def main():
     )
     parser.add_argument(
         "--skip-baseline", action="store_true",
-        help="Skip the V2I-only baseline run (saves time on smoke tests)"
+        help="Skip the V2I-only baseline run (useful for quick smoke-tests)"
     )
     args = parser.parse_args()
 
     # ── Step 1: Train ──────────────────────────────────────────────────────
-    model = train_ppo(args.timesteps, args.eval_freq)
+    # train_env is closed inside train_ppo() before returning
+    model = train_ppo(args.timesteps, args.checkpoint_freq)
 
-    # ── Step 2: Post-training RL Evaluation ───────────────────────────────
-    # Load best model (often better than the final checkpoint)
-    best_model_zip = os.path.join(MODELS_DIR, "best_model.zip")
-    if os.path.exists(best_model_zip):
-        print(f"\n[→] Loading best model from {best_model_zip}")
-        model = PPO.load(best_model_zip)
+    # ── Step 2: Load best checkpoint for evaluation ───────────────────────
+    best_path = _best_model_path()
+    if os.path.exists(best_path):
+        print(f"\n[→] Loading model from {best_path}")
+        model = PPO.load(best_path)
+    else:
+        print("[!] No checkpoint found — using in-memory final model")
 
+    # ── Step 3: Post-training RL Evaluation ───────────────────────────────
+    # Fresh SUMO process — safe because train_env was closed in step 1
     run_evaluation(model, n_episodes=args.eval_episodes, label="RL_PPO")
 
-    # ── Step 3: Baseline Comparison ───────────────────────────────────────
+    # ── Step 4: Baseline Comparison ───────────────────────────────────────
+    # Another fresh SUMO process — safe because eval env was closed above
     if not args.skip_baseline:
         run_baseline(n_episodes=args.eval_episodes)
 
     print("\n" + "=" * 60)
     print("  Training complete!")
-    print(f"  Model checkpoints : {MODELS_DIR}/")
-    print(f"  Training logs     : {TRAIN_MONITOR_DIR}/train.monitor.csv")
+    print(f"  Checkpoints       : {MODELS_DIR}/")
+    print(f"  Training monitor  : {TRAIN_MONITOR_DIR}/train.monitor.csv")
     print(f"  RL eval results   : {EVAL_SUMMARY_CSV}")
-    print(f"  Baseline results  : {BASELINE_SUMMARY_CSV}")
+    if not args.skip_baseline:
+        print(f"  Baseline results  : {BASELINE_SUMMARY_CSV}")
+    print("  TensorBoard       : tensorboard --logdir " + TB_LOGS_DIR)
     print("  → Run: python src/visualization/plot_results.py")
     print("=" * 60)
 

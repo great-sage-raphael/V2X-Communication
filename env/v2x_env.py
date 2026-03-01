@@ -18,12 +18,25 @@ Telemetry: Each episode accumulates per-step metrics. Call get_episode_summary()
            the episode ends to retrieve a dict with averaged PDR, latency, and mode usage.
 """
 
+import sys
+import os
+
+# Use the SUMO-bundled traci/sumolib (avoids any pip-installed version conflicts).
+# The system SUMO install ships its own Python tools at SUMO_HOME/tools.
+_SUMO_TOOLS = "/Users/vinayakprakash/sumo/tools"
+if _SUMO_TOOLS not in sys.path:
+    sys.path.insert(0, _SUMO_TOOLS)
+
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import traci
+from traci.exceptions import FatalTraCIError
 import math
 import random
+import subprocess
+import socket
+import time
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
 MAX_VEHICLES = 20                    # Size of the fixed observation matrix
@@ -79,6 +92,8 @@ class V2XEnv(gym.Env):
         # Internal state
         self.step_count    = 0
         self.vehicle_list  = []
+        self._sumo_proc    = None  # SUMO subprocess handle (started once)
+        self._sumo_started = False # Whether SUMO is already running
 
         # ── Per-episode telemetry (reset every episode) ───────────────────────
         self._ep_pdrs       = []   # PDR per step
@@ -91,18 +106,43 @@ class V2XEnv(gym.Env):
     # ─────────────────────────────────────────────────────────────────────────
 
     def reset(self, seed=None, options=None):
-        """Restart the SUMO simulation and clear episode telemetry."""
+        """Reset the SUMO simulation for a new episode.
+        Strategy: start SUMO ONCE per env instance, then use traci.load()
+        on subsequent resets to reload the scenario within the running process.
+        This avoids all port-binding timing races on episode boundaries.
+        """
         super().reset(seed=seed)
 
-        # Gracefully close any existing SUMO connection
-        try:
-            traci.close()
-        except Exception:
-            pass
+        if not self._sumo_started:
+            # ── First ever reset: launch SUMO and connect TraCI ────────────────
+            _sock = socket.socket()
+            _sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            _sock.bind(('127.0.0.1', 0))
+            port = _sock.getsockname()[1]
+            _sock.close()
 
-        # Launch SUMO in headless (non-GUI) mode for RL training
-        sumo_cmd = [SUMO_BINARY, "-c", SUMO_CONFIG, "--no-warnings"]
-        traci.start(sumo_cmd)
+            sumo_cmd = [
+                SUMO_BINARY,
+                "-c", SUMO_CONFIG,
+                "--no-warnings",
+                "--remote-port", str(port),
+            ]
+            self._sumo_proc = subprocess.Popen(
+                sumo_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            # Wait for SUMO to open the port, then connect.
+            # Do NOT probe the port (a raw TCP connection triggers SUMO's TraCI
+            # handshake, and closing the probe causes SUMO to quit).
+            time.sleep(2.0)
+            traci.init(port, proc=self._sumo_proc)
+            self._sumo_started = True
+        else:
+            # ── Subsequent resets: reload config inside running SUMO ───────────
+            # traci.load() rewinds the simulation to t=0 without restarting
+            # the process — zero port latency, zero startup races.
+            traci.load(["-c", SUMO_CONFIG, "--no-warnings"])
 
         # Reset counters and telemetry buffers
         self.step_count    = 0
